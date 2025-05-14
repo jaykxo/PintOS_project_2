@@ -20,6 +20,9 @@
 /* Number of timer ticks since OS booted. */
 static int64_t ticks;
 
+/* 전역 최소 슬립틱. */
+int64_t least_sleep_ticks = INT64_MAX; 
+
 /* Number of loops per timer tick.
    Initialized by timer_calibrate(). */
 static unsigned loops_per_tick;
@@ -90,12 +93,18 @@ timer_elapsed (int64_t then) {
 /* Suspends execution for approximately TICKS timer ticks. */
 void
 timer_sleep (int64_t ticks) {
-	int64_t start = timer_ticks ();
 
+	// int64_t start = timer_ticks ();
+
+	//일어날 시간 저장, 커널에서 슬립리스트 관리하게 해야댐.
+	int64_t wake_ticks = timer_ticks () + ticks;
+// -> 레디리스트에서 나올때마다 while문 조건 체크하면서 tick보다 해당 sleep 시작 tick이 작으면 thread_yield(양보) 실행
+//-> 바쁘게 문맥교환 해가면서 waiting 하는 busy wait 상태
 	ASSERT (intr_get_level () == INTR_ON);
-	while (timer_elapsed (start) < ticks)
-		thread_yield ();
-}
+	// while (timer_elapsed (start) < ticks)
+	// 	thread_yield ();
+	thread_sleep(wake_ticks);
+} 
 
 /* Suspends execution for approximately MS milliseconds. */
 void
@@ -126,7 +135,15 @@ static void
 timer_interrupt (struct intr_frame *args UNUSED) {
 	ticks++;
 	thread_tick ();
+	//커널이 핸들링함.
+	//글로벌틱 체크하고 슬립리스트 확인
+	if (ticks >= least_sleep_ticks){
+		thread_wake_up();
+	}
+		
 }
+
+
 
 /* Returns true if LOOPS iterations waits for more than one timer
    tick, otherwise false. */

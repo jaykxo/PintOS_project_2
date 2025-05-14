@@ -5,7 +5,7 @@
 #include <stdbool.h>
 
 /* A counting semaphore. */
-struct semaphore {
+struct semaphore {//현재 자원값이랑 wait 리스트 관리를 위한 세마포어 구조체
 	unsigned value;             /* Current value. */
 	struct list waiters;        /* List of waiting threads. */
 };
@@ -37,7 +37,7 @@ void cond_init (struct condition *);
 void cond_wait (struct condition *, struct lock *);
 void cond_signal (struct condition *, struct lock *);
 void cond_broadcast (struct condition *, struct lock *);
-
+extern void refresh_priority(struct thread *t);
 /* Optimization barrier.
  *
  * The compiler will not reorder operations across an
