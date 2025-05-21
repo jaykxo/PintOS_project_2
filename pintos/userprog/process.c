@@ -26,7 +26,7 @@ static void process_cleanup (void);
 static bool load (const char *file_name, struct intr_frame *if_);
 static void initd (void *f_name);
 static void __do_fork (void *);
-
+void argument_passing(char**argv,int argc,struct intr_frame *if_);
 /* General process initializer for initd and other process. */
 static void
 process_init (void) {
@@ -38,22 +38,37 @@ process_init (void) {
  * before process_create_initd() returns. Returns the initd's
  * thread id, or TID_ERROR if the thread cannot be created.
  * Notice that THIS SHOULD BE CALLED ONCE. */
+// "FILE_NAME"에서 로드된 "initd"라는 첫 번째 유저랜드 프로그램을 시작합니다.
+// 새로 생성된 스레드는 process_create_initd()가 반환되기 전에 스케줄되어 실행되거나, 심지어 종료될 수도 있습니다.
+// initd의 스레드 ID를 반환하며, 스레드를 생성할 수 없을 경우 TID_ERROR를 반환합니다.
+// 이 함수는 반드시 한 번만 호출되어야 합니다.
 tid_t
 process_create_initd (const char *file_name) {
-	char *fn_copy;
+	char *fn_copy, *fn_copy2;
+	char *real_name;
+	char * next_ptr;
 	tid_t tid;
-
 	/* Make a copy of FILE_NAME.
 	 * Otherwise there's a race between the caller and load(). */
-	fn_copy = palloc_get_page (0);
+// 	FILE_NAME의 복사본을 만듭니다.
+// 그렇지 않으면 **호출자와 load() 함수 사이에 경쟁 상태(race condition)**가 발생할 수 있습니다.
+	fn_copy = palloc_get_page (0); // 한 페이지 할당
 	if (fn_copy == NULL)
 		return TID_ERROR;
 	strlcpy (fn_copy, file_name, PGSIZE);
 
+	fn_copy2 = palloc_get_page(0); // 한 페이지 할당
+	if (fn_copy2 == NULL)
+		return TID_ERROR;
+	strlcpy (fn_copy2, file_name, PGSIZE);
+
+	real_name = strtok_r(fn_copy2," ",&next_ptr);
+
 	/* Create a new thread to execute FILE_NAME. */
-	tid = thread_create (file_name, PRI_DEFAULT, initd, fn_copy);
+	tid = thread_create (real_name, PRI_DEFAULT, initd, fn_copy);
 	if (tid == TID_ERROR)
 		palloc_free_page (fn_copy);
+	palloc_free_page(fn_copy2);
 	return tid;
 }
 
@@ -164,6 +179,18 @@ int
 process_exec (void *f_name) {
 	char *file_name = f_name;
 	bool success;
+	char* file_name_copy;
+	char *next_ptr;
+	char *argv[64];
+	int argc = 0;
+
+	//문자열 파싱
+	argv[0] = strtok_r(file_name," ",&next_ptr);
+	while(argv[argc]!=NULL){
+		argc++;
+		argv[argc] = strtok_r(NULL," ",&next_ptr);
+	}
+	argv[argc] = NULL; // 유닉스같은데선 문자열 인자(argv) 끝났다는걸 알리기 위해 NULL 넣어줌
 
 	/* We cannot use the intr_frame in the thread structure.
 	 * This is because when current thread rescheduled,
@@ -172,19 +199,21 @@ process_exec (void *f_name) {
 	_if.ds = _if.es = _if.ss = SEL_UDSEG;
 	_if.cs = SEL_UCSEG;
 	_if.eflags = FLAG_IF | FLAG_MBS;
-
+	//f_name 파싱해서, 실행할 파일은 filename에 갱신? o
 	/* We first kill the current context */
 	process_cleanup ();
 
 	/* And then load the binary */
 	success = load (file_name, &_if);
-
+	argument_passing(argv,argc,&_if);
 	/* If load failed, quit. */
 	palloc_free_page (file_name);
-	if (!success)
+	if (!success){
 		return -1;
+	}
 
 	/* Start switched process. */
+	// hex_dump(_if.rsp, _if.rsp, USER_STACK-_if.rsp, true);
 	do_iret (&_if);
 	NOT_REACHED ();
 }
@@ -201,6 +230,9 @@ process_exec (void *f_name) {
  * does nothing. */
 int
 process_wait (tid_t child_tid UNUSED) {
+	for(int i=0;i<400000000;i++){
+		
+	}
 	/* XXX: Hint) The pintos exit if process_wait (initd), we recommend you
 	 * XXX:       to add infinite loop here before
 	 * XXX:       implementing the process_wait. */
@@ -215,7 +247,7 @@ process_exit (void) {
 	 * TODO: Implement process termination message (see
 	 * TODO: project2/process_termination.html).
 	 * TODO: We recommend you to implement process resource cleanup here. */
-
+	printf("%s: exit(%d)\n", curr->name, curr->exit_status);
 	process_cleanup ();
 }
 
@@ -333,12 +365,12 @@ load (const char *file_name, struct intr_frame *if_) {
 	t->pml4 = pml4_create ();
 	if (t->pml4 == NULL)
 		goto done;
-	process_activate (thread_current ());
 
+	process_activate (thread_current ());
+	//여기서 파싱
 	/* Open executable file. */
 	file = filesys_open (file_name);
 	if (file == NULL) {
-		printf ("load: %s: open failed\n", file_name);
 		goto done;
 	}
 
@@ -413,12 +445,10 @@ load (const char *file_name, struct intr_frame *if_) {
 
 	/* Start address. */
 	if_->rip = ehdr.e_entry;
-
 	/* TODO: Your code goes here.
 	 * TODO: Implement argument passing (see project2/argument_passing.html). */
 
 	success = true;
-
 done:
 	/* We arrive here whether the load is successful or not. */
 	file_close (file);
@@ -637,3 +667,50 @@ setup_stack (struct intr_frame *if_) {
 	return success;
 }
 #endif /* VM */
+
+
+void argument_passing(char**argv,int argc,struct intr_frame *if_){
+	// char *next_ptr;
+	// char *argv[128];
+	char *arg_ptrs[32]; 
+	// int argc = 0;
+	// //문자열 파싱
+	// argv[0] = strtok_r(file_name," ",&next_ptr);
+	// while(argv[argc]!=NULL){
+	// 	argc++;
+	// 	argv[argc] = strtok_r(NULL," ",&next_ptr);
+	// }
+	// argv[argc] = NULL; // 유닉스같은데선 문자열 인자(argv) 끝났다는걸 알리기 위해 NULL 넣어줌
+	void *rsp = if_->rsp;
+
+	for(int i = argc -1;i>=0;i--){//User Stack 시작점부터 아래로 채우기
+		size_t len=strlen(argv[i])+1;//\0 종료문자 포함
+		rsp-= len;
+		memcpy(rsp,argv[i],len);
+		arg_ptrs[i] = rsp;//문자열 저장주소 저장.
+	}
+
+	//정렬을 위해 현재 rsp위치에서 8 나눈 나머지값만큼 -하고 그 길이만큼 그 위치의 내용물 0으로 초기화
+
+	uint8_t align = (uint8_t)rsp%8;
+	if(align){
+		rsp-=align;
+		memset(rsp,0,align);
+	}
+	
+
+	//아래부터  저장한  arg_ptrs 주소 하나씩.
+	rsp-=8;
+	*(char**)rsp = NULL;
+	for(int i = argc -1;i>=0;i--){//NULL(argv(argc)) 아래부터 아래로 채우기
+		rsp-=8;//정렬단위
+		memcpy(rsp,&arg_ptrs[i],sizeof(char*));
+	}
+	
+	if_->R.rsi = (uint64_t)rsp;//rsi에 argv 배열주소 저장
+	if_->R.rdi = argc;//rdi에 argc 저장.
+	rsp-=sizeof(void *);
+	memset(rsp, 0, sizeof(char*)); 
+	if_->rsp = rsp;
+	
+}

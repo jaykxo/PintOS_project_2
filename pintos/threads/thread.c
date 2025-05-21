@@ -196,7 +196,7 @@ thread_print_stats (void) {
    Priority scheduling is the goal of Problem 1-3. */
 tid_t
 thread_create (const char *name, int priority,
-		thread_func *function, void *aux) {
+		thread_func *function, void *aux) {	
 	struct thread *t;
 	tid_t tid;
 
@@ -446,7 +446,6 @@ idle (void *idle_started_ UNUSED) {
 static void
 kernel_thread (thread_func *function, void *aux) {
 	ASSERT (function != NULL);
-
 	intr_enable ();       /* The scheduler runs with interrupts off. */
 	function (aux);       /* Execute the thread function. */
 	thread_exit ();       /* If function() returns, kill the thread. */
@@ -715,7 +714,7 @@ thread_wake_up(void){
 
 //선점 함수.
 void preemption_priority(void) {
-	if (!list_empty(&ready_list) && thread_current()->priority
+	if (!intr_context() && !list_empty(&ready_list) && thread_current()->priority
 	< list_entry(list_front(&ready_list), struct thread, elem)->priority) {
 		thread_yield();
 	}
