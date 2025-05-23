@@ -8,6 +8,7 @@
         "string_view": "c",
         "initializer_list": "c",
         "utility": "c",
-        "mmu.h": "c"
+        "mmu.h": "c",
+        "stddef.h": "c"
     }
 }

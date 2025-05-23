@@ -91,8 +91,24 @@ initd (void *f_name) {
 tid_t
 process_fork (const char *name, struct intr_frame *if_ UNUSED) {
 	/* Clone current thread to new thread.*/
-	return thread_create (name,
-			PRI_DEFAULT, __do_fork, thread_current ());
+	struct thread *parent = thread_current(); // 지금 스레드는 부모
+	parent->user_if = *if_; // 스레드 구조체에 버퍼용 인터럽트프레임 생성후 저장
+
+	sema_init(&parent->fork_sema, 0); // 부모의 세마 초기화
+    parent->fork_success = false; // fork 성공여부 -> 처음엔 실패로 해놔야됨. 할때마다 초반에 초기화.
+
+
+	tid_t pid = thread_create (name,
+			PRI_DEFAULT, __do_fork, thread_current ());// 자식의 tid 반환
+	if (pid == TID_ERROR) //  thread_create 실패시 TID_ERROR 반환함.
+        return TID_ERROR;
+
+	struct thread *child = get_child_process(pid);
+	// 세마 다운, 자식쪽에서 준비끝나면 sema up 예정
+
+    sema_down(&child->fork_sema);
+
+	return child->exit_status == TID_ERROR ? TID_ERROR:pid;
 }
 
 #ifndef VM
@@ -107,21 +123,28 @@ duplicate_pte (uint64_t *pte, void *va, void *aux) {
 	bool writable;
 
 	/* 1. TODO: If the parent_page is kernel page, then return immediately. */
-
+	if (is_kernel_vaddr(va))  // 가상주소가 커널영역인가?
+		return true; //커널영역이면 패스해도 됨.어차피 다 같은 물리주소로 매핑되니까.
 	/* 2. Resolve VA from the parent's page map level 4. */
 	parent_page = pml4_get_page (parent->pml4, va);
-
+		if(parent_page == NULL) return false;
 	/* 3. TODO: Allocate new PAL_USER page for the child and set result to
 	 *    TODO: NEWPAGE. */
+	newpage = palloc_get_page(PAL_USER);
+	if (newpage == NULL) return false;
 
 	/* 4. TODO: Duplicate parent's page to the new page and
 	 *    TODO: check whether parent's page is writable or not (set WRITABLE
 	 *    TODO: according to the result). */
-
+	memcpy(newpage, parent_page, PGSIZE);
+	writable = is_writable(pte); // mmu.h 에 있음. 읽기 가능한지 호가인.
 	/* 5. Add new page to child's page table at address VA with WRITABLE
 	 *    permission. */
+	
 	if (!pml4_set_page (current->pml4, va, newpage, writable)) {
 		/* 6. TODO: if fail to insert page, do error handling. */
+		palloc_free_page(newpage);//그냥 끄지 말고 free 하셈.
+		return false;
 	}
 	return true;
 }
@@ -131,17 +154,23 @@ duplicate_pte (uint64_t *pte, void *va, void *aux) {
  * Hint) parent->tf does not hold the userland context of the process.
  *       That is, you are required to pass second argument of process_fork to
  *       this function. */
+/* 부모의 실행 컨텍스트를 복사하는 스레드 함수입니다.
+ * 힌트) parent->tf는 프로세스의 사용자 영역(context)을 저장하고 있지 않습니다.
+ *       즉, process_fork의 두 번째 인자를 이 함수에 전달해야 합니다. */
+
 static void
-__do_fork (void *aux) {
+__do_fork (void *aux) { 
 	struct intr_frame if_;
-	struct thread *parent = (struct thread *) aux;
+	struct thread *parent = (struct thread *) aux;//부모 스레드 들고오기
 	struct thread *current = thread_current ();
 	/* TODO: somehow pass the parent_if. (i.e. process_fork()'s if_) */
 	struct intr_frame *parent_if;
 	bool succ = true;
-
+	parent_if = &parent->user_if;//인터럽트 페이지 넘기고.
 	/* 1. Read the cpu context to local stack. */
 	memcpy (&if_, parent_if, sizeof (struct intr_frame));
+	if_.R.rax = 0; //자식 반환값 설정.
+	//자식의 인터럽트 프레임에 넘기기.
 
 	/* 2. Duplicate PT */
 	current->pml4 = pml4_create();
@@ -163,14 +192,27 @@ __do_fork (void *aux) {
 	 * TODO:       in include/filesys/file.h. Note that parent should not return
 	 * TODO:       from the fork() until this function successfully duplicates
 	 * TODO:       the resources of parent.*/
+	/* TODO: 여기에 여러분의 코드를 작성하세요.
+	 * TODO: 힌트) 파일 객체를 복제하려면 `include/filesys/file.h`에 정의된 `file_duplicate`를 사용하세요.
+	 * TODO: 주의할 점은, 부모 프로세스는 자식의 리소스 복제가 성공적으로 완료되기 전까지는
+	 * TODO: fork()에서 반환하면 안 된다는 것입니다. */ //process_fork 에서 sema 다운 해놨음.
 
-	process_init ();
+	for (int fd = 0; fd < FD_LIMIT; fd++) {
+        if (parent->fd_table[fd] != NULL) {
+            current->fd_table[fd] = file_duplicate(parent->fd_table[fd]); //file_duplicate는 file 구조체를 사용함. 스레드에 구조체 만들죠?
+        }
+    }
+	process_init ();//프로세스 초기화
+
+
+
+    sema_up(&parent->fork_sema); //  unblock 해주고.
 
 	/* Finally, switch to the newly created process. */
 	if (succ)
-		do_iret (&if_);
+		do_iret (&if_);//유저 모드 진입
 error:
-	thread_exit ();
+	exit(current->exit_status); //  현재 프로세스(자식)의 종료상태 설정.
 }
 
 /* Switch the current execution context to the f_name.
@@ -236,7 +278,13 @@ process_wait (tid_t child_tid UNUSED) {
 	/* XXX: Hint) The pintos exit if process_wait (initd), we recommend you
 	 * XXX:       to add infinite loop here before
 	 * XXX:       implementing the process_wait. */
-	return -1;
+	struct thread *child_thread = get_child_process(child_tid);
+	if(!child_thread)return -1;
+	sema_down(&child_thread->wait_sema);//자식의 exit 시그널 기다리는중.
+	list_remove(&child_thread->child_elem);
+	int status = child_thread->exit_status;
+	sema_up(&child_thread->exit_sema); 
+	
 }
 
 /* Exit the process. This function is called by thread_exit (). */
@@ -249,6 +297,8 @@ process_exit (void) {
 	 * TODO: We recommend you to implement process resource cleanup here. */
 	printf("%s: exit(%d)\n", curr->name, curr->exit_status);
 	process_cleanup ();
+	sema_up(&curr->wait_sema);//부모가 wait 풀고 리스트에서 지우도록 up
+	sema_down(&curr->exit_sema);//부모가 할거 다하면 down
 }
 
 /* Free the current process's resources. */
@@ -713,4 +763,20 @@ void argument_passing(char**argv,int argc,struct intr_frame *if_){
 	memset(rsp, 0, sizeof(char*)); 
 	if_->rsp = rsp;
 	
+}
+
+
+
+struct thread* get_child_process(tid_t pid){
+	struct thread *cur = thread_current();
+	struct list *child_list = &cur->child_list; //자식리스트 뒤지기.
+	for (struct list_elem *e = list_begin(child_list); e != list_end(child_list); e = list_next(e))
+	{
+		struct thread *t = list_entry(e, struct thread, child_elem);
+		// 해당 pid가 존재하면 스레드 반환 
+		if (t->tid == pid)
+			return t;
+	}
+	//리스트에 존재하지 않으면 NULL 리턴
+	return NULL;
 }

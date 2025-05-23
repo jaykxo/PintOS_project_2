@@ -61,9 +61,12 @@ syscall_handler (struct intr_frame *f UNUSED) {
 		power_off();
 		break;
 		case SYS_FORK:
-		syscall_fork((const char *)arg0,f);
+		f->R.rax = process_fork((const char *)arg0,f);
 		break;
-  	}
+		case SYS_WAIT:
+		f->R.rax = syscall_wait((tid_t) arg0);
+		break;
+	}
 	// printf ("system call!\n");
 	// thread_exit ();
 }
@@ -76,6 +79,7 @@ int syscall_exit(int status){
 	struct thread *cur = thread_current(); //프로세스의 커널 스레드.
     cur->exit_status = status; // 부모에게 전달할 종료 상태
          // 종료 처리
+	// sema_up(cur->exit_sema);
     thread_exit(); 
 }
 
@@ -89,6 +93,9 @@ int syscall_write(int fd,void * buffer, unsigned size){
 	return -1;
 }
 
-pid_t syscall_fork(const char *thread_name,struct intr_frame *f){
-	process_fork(thread_name,);
+int syscall_wait(tid_t pid){
+ //sema로 자식프로세스 종료 기다림. wait sema 만들고
+	return process_wait(pid);
+ //자식이 exit시에 넘긴 status 읽음.
 }
+

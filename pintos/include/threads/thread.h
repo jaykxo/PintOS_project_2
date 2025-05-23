@@ -5,6 +5,7 @@
 #include <list.h>
 #include <stdint.h>
 #include "threads/interrupt.h"
+#include "threads/synch.h"
 #ifdef VM
 #include "vm/vm.h"
 #endif
@@ -27,7 +28,7 @@ typedef int tid_t;
 #define PRI_MIN 0                       /* Lowest priority. */
 #define PRI_DEFAULT 31                  /* Default priority. */
 #define PRI_MAX 63                      /* Highest priority. */
-
+#define FD_LIMIT 63
 /* A kernel thread or user process.
  *
  * Each thread structure is stored in its own 4 kB page.  The
@@ -100,6 +101,14 @@ struct thread {
 	struct list donations;//도네이션용 리스트
 	struct list_elem d_elem;//위 리스트에 들어갈 원소.
 
+	tid_t p_tid; //자식은 부모의 id를 알고있어야 함.
+    struct intr_frame user_if; // 부모의 유저 레지스터 
+    struct semaphore fork_sema; // 부모-자식 동기화
+	struct semaphore exit_sema; 
+	struct semaphore wait_sema; 
+	struct list child_list; // 자식 리스트
+	struct list_elem child_elem; //자식 리스트 원소
+	struct file *fd_table[FD_LIMIT];  //fdt
 
 #ifdef USERPROG
 	/* Owned by userprog/process.c. */ 

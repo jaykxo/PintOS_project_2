@@ -222,6 +222,8 @@ thread_create (const char *name, int priority,
 	t->tf.cs = SEL_KCSEG;
 	t->tf.eflags = FLAG_IF;
 
+	// 현재 스레드의 자식으로 추가
+	list_push_back(&thread_current()->child_list, &t->child_elem);
 	/* Add to run queue. */
 	thread_unblock (t);
 	preemption_priority();
@@ -329,6 +331,10 @@ thread_exit (void) {
 
 	/* Just set our status to dying and schedule another process.
 	   We will be destroyed during the call to schedule_tail(). */
+	   /* 현재 스레드의 상태를 dying(사망 예정)으로 설정하고,
+   다른 프로세스를 스케줄하도록 한다.
+   우리는 schedule_tail() 호출 중에 완전히 파괴된다. */
+
 	intr_disable ();
 	do_schedule (THREAD_DYING);
 	NOT_REACHED ();
@@ -468,6 +474,7 @@ init_thread (struct thread *t, const char *name, int priority) {
 	t->init_priority = priority;
 	t->magic = THREAD_MAGIC;
 	list_init (&t->donations);
+	list_init (&t->child_list);
 }
 
 /* Chooses and returns the next thread to be scheduled.  Should
