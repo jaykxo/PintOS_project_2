@@ -66,13 +66,17 @@ syscall_handler (struct intr_frame *f UNUSED) {
 		case SYS_WAIT:
 		f->R.rax = syscall_wait((tid_t) arg0);
 		break;
+		case SYS_EXEC:
+		check_user_address(arg0); 
+		process_exec(arg0);
+		break;
 	}
 	// printf ("system call!\n");
 	// thread_exit ();
 }
 void check_user_address(const void *uaddr) {//user memory access
     if (uaddr == NULL || !is_user_vaddr(uaddr) || pml4_get_page(thread_current()->pml4, uaddr) == NULL) // NULL 넘겼는지 || 유저영역인지 || 일부만 유효? 시작 끝이 페이지 테이블에 매핑 되어있는지 
-        exit(-1); // 잘못된 주소면 프로세스 종료
+        syscall_exit(-1); // 잘못된 주소면 프로세스 종료
 }
 
 int syscall_exit(int status){

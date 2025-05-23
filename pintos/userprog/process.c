@@ -27,6 +27,7 @@ static bool load (const char *file_name, struct intr_frame *if_);
 static void initd (void *f_name);
 static void __do_fork (void *);
 void argument_passing(char**argv,int argc,struct intr_frame *if_);
+struct thread* get_child_process(tid_t pid);
 /* General process initializer for initd and other process. */
 static void
 process_init (void) {
@@ -78,7 +79,6 @@ initd (void *f_name) {
 #ifdef VM
 	supplemental_page_table_init (&thread_current ()->spt);
 #endif
-
 	process_init ();
 
 	if (process_exec (f_name) < 0)
@@ -94,8 +94,7 @@ process_fork (const char *name, struct intr_frame *if_ UNUSED) {
 	struct thread *parent = thread_current(); // 지금 스레드는 부모
 	parent->user_if = *if_; // 스레드 구조체에 버퍼용 인터럽트프레임 생성후 저장
 
-	sema_init(&parent->fork_sema, 0); // 부모의 세마 초기화
-    parent->fork_success = false; // fork 성공여부 -> 처음엔 실패로 해놔야됨. 할때마다 초반에 초기화.
+
 
 
 	tid_t pid = thread_create (name,
@@ -212,7 +211,7 @@ __do_fork (void *aux) {
 	if (succ)
 		do_iret (&if_);//유저 모드 진입
 error:
-	exit(current->exit_status); //  현재 프로세스(자식)의 종료상태 설정.
+	syscall_exit(current->exit_status); //  현재 프로세스(자식)의 종료상태 설정.
 }
 
 /* Switch the current execution context to the f_name.
@@ -251,7 +250,7 @@ process_exec (void *f_name) {
 	/* If load failed, quit. */
 	palloc_free_page (file_name);
 	if (!success){
-		return -1;
+		return syscall_exit(-1);
 	}
 
 	/* Start switched process. */
@@ -272,18 +271,22 @@ process_exec (void *f_name) {
  * does nothing. */
 int
 process_wait (tid_t child_tid UNUSED) {
-	for(int i=0;i<400000000;i++){
+	// for(int i=0;i<400000000;i++){
 		
-	}
+	// }
 	/* XXX: Hint) The pintos exit if process_wait (initd), we recommend you
 	 * XXX:       to add infinite loop here before
 	 * XXX:       implementing the process_wait. */
+
+	 
 	struct thread *child_thread = get_child_process(child_tid);
-	if(!child_thread)return -1;
+	if(!child_thread || child_thread->is_waited)return -1;
+	child_thread->is_waited = true;
 	sema_down(&child_thread->wait_sema);//자식의 exit 시그널 기다리는중.
-	list_remove(&child_thread->child_elem);
 	int status = child_thread->exit_status;
+	list_remove(&child_thread->child_elem);
 	sema_up(&child_thread->exit_sema); 
+	return status;
 	
 }
 
@@ -295,7 +298,10 @@ process_exit (void) {
 	 * TODO: Implement process termination message (see
 	 * TODO: project2/process_termination.html).
 	 * TODO: We recommend you to implement process resource cleanup here. */
-	printf("%s: exit(%d)\n", curr->name, curr->exit_status);
+    if (curr->pml4 != NULL) {
+    // 유저 프로세스 (페이지 테이블이 설정된 경우)
+    printf("%s: exit(%d)\n", curr->name, curr->exit_status);
+}
 	process_cleanup ();
 	sema_up(&curr->wait_sema);//부모가 wait 풀고 리스트에서 지우도록 up
 	sema_down(&curr->exit_sema);//부모가 할거 다하면 down
