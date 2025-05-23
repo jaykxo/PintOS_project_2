@@ -224,7 +224,6 @@ process_exec (void *f_name) {
 	char *next_ptr;
 	char *argv[64];
 	int argc = 0;
-
 	//문자열 파싱
 	argv[0] = strtok_r(file_name," ",&next_ptr);
 	while(argv[argc]!=NULL){
@@ -246,13 +245,13 @@ process_exec (void *f_name) {
 
 	/* And then load the binary */
 	success = load (file_name, &_if);
+	if (!success){
+		palloc_free_page (file_name);
+		return -1;
+	}
 	argument_passing(argv,argc,&_if);
 	/* If load failed, quit. */
 	palloc_free_page (file_name);
-	if (!success){
-		return syscall_exit(-1);
-	}
-
 	/* Start switched process. */
 	// hex_dump(_if.rsp, _if.rsp, USER_STACK-_if.rsp, true);
 	do_iret (&_if);
@@ -494,11 +493,9 @@ load (const char *file_name, struct intr_frame *if_) {
 				break;
 		}
 	}
-
 	/* Set up stack. */
 	if (!setup_stack (if_))
 		goto done;
-
 	/* Start address. */
 	if_->rip = ehdr.e_entry;
 	/* TODO: Your code goes here.

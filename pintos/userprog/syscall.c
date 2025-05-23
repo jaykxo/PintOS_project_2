@@ -5,9 +5,15 @@
 #include "threads/thread.h"
 #include "threads/loader.h"
 #include "userprog/gdt.h"
+#include "userprog/process.h"
 #include "threads/flags.h"
+#include "filesys/filesys.h"
 #include "intrinsic.h"
 #include "filesys/file.h"
+#include "threads/synch.h"
+#include "devices/input.h"
+#include "lib/kernel/stdio.h"
+#include "threads/palloc.h"
 
 void syscall_entry (void);
 void syscall_handler (struct intr_frame *);
@@ -67,8 +73,7 @@ syscall_handler (struct intr_frame *f UNUSED) {
 		f->R.rax = syscall_wait((tid_t) arg0);
 		break;
 		case SYS_EXEC:
-		check_user_address(arg0); 
-		process_exec(arg0);
+		f->R.rax = exec(arg0);
 		break;
 	}
 	// printf ("system call!\n");
@@ -103,3 +108,29 @@ int syscall_wait(tid_t pid){
  //자식이 exit시에 넘긴 status 읽음.
 }
 
+
+int exec(const char *cmd_line)
+{
+	// check_user_address(cmd_line); 
+
+	// char *cmd_line_copy;
+	// cmd_line_copy = palloc_get_page(0);
+	// if (cmd_line_copy == NULL)
+	// 	syscall_exit(-1);						  
+	// strlcpy(cmd_line_copy, cmd_line, PGSIZE); 
+
+	// // 스레드의 이름을 변경하지 않고 바로 실행한다.
+	// if (process_exec(cmd_line_copy) == -1)
+	// 	syscall_exit(-1); // 실패 시 status -1로 종료한다.
+	check_user_address(cmd_line);
+
+    off_t size = strlen(cmd_line) + 1;
+    char *cmd_copy = palloc_get_page(PAL_ZERO);
+
+    if (cmd_copy == NULL)
+        return -1;
+
+    memcpy(cmd_copy, cmd_line, size);
+
+    return process_exec(cmd_copy);
+}
