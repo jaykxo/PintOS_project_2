@@ -73,7 +73,7 @@ syscall_handler (struct intr_frame *f UNUSED) {
 		f->R.rax = syscall_wait((tid_t) arg0);
 		break;
 		case SYS_EXEC:
-		f->R.rax = exec(arg0);
+		if(exec(arg0) ==-1 )syscall_exit(-1) ;
 		break;
 	}
 	// printf ("system call!\n");
@@ -111,26 +111,26 @@ int syscall_wait(tid_t pid){
 
 int exec(const char *cmd_line)
 {
-	// check_user_address(cmd_line); 
+	check_user_address(cmd_line); 
 
-	// char *cmd_line_copy;
-	// cmd_line_copy = palloc_get_page(0);
-	// if (cmd_line_copy == NULL)
-	// 	syscall_exit(-1);						  
-	// strlcpy(cmd_line_copy, cmd_line, PGSIZE); 
+	char *cmd_line_copy;
+	cmd_line_copy = palloc_get_page(0);
+	if (cmd_line_copy == NULL)
+		return -1;						  
+	strlcpy(cmd_line_copy, cmd_line, PGSIZE); 
 
-	// // 스레드의 이름을 변경하지 않고 바로 실행한다.
-	// if (process_exec(cmd_line_copy) == -1)
-	// 	syscall_exit(-1); // 실패 시 status -1로 종료한다.
-	check_user_address(cmd_line);
+	// 스레드의 이름을 변경하지 않고 바로 실행한다.
+	if (process_exec(cmd_line_copy) == -1)
+		return -1; // 실패 시 status -1로 종료한다.
+	// check_user_address(cmd_line);
 
-    off_t size = strlen(cmd_line) + 1;
-    char *cmd_copy = palloc_get_page(PAL_ZERO);
+    // off_t size = strlen(cmd_line) + 1;
+    // char *cmd_copy = palloc_get_page(PAL_ZERO);
 
-    if (cmd_copy == NULL)
-        return -1;
+    // if (cmd_copy == NULL)
+    //     return -1;
 
-    memcpy(cmd_copy, cmd_line, size);
+    // memcpy(cmd_copy, cmd_line, size);
 
-    return process_exec(cmd_copy);
+    // return process_exec(cmd_copy);
 }

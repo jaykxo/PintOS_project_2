@@ -92,15 +92,16 @@ tid_t
 process_fork (const char *name, struct intr_frame *if_ UNUSED) {
 	/* Clone current thread to new thread.*/
 	struct thread *parent = thread_current(); // 지금 스레드는 부모
-	parent->user_if = *if_; // 스레드 구조체에 버퍼용 인터럽트프레임 생성후 저장
+	// parent->user_if = *if_; // 스레드 구조체에 버퍼용 인터럽트프레임 생성후 저장
 
 
 
-
+	memcpy(&parent->user_if, if_, sizeof(struct intr_frame));
 	tid_t pid = thread_create (name,
-			PRI_DEFAULT, __do_fork, thread_current ());// 자식의 tid 반환
+			parent->priority, __do_fork, parent);// 자식의 tid 반환
 	if (pid == TID_ERROR) //  thread_create 실패시 TID_ERROR 반환함.
         return TID_ERROR;
+	
 
 	struct thread *child = get_child_process(pid);
 	// 세마 다운, 자식쪽에서 준비끝나면 sema up 예정
@@ -201,36 +202,27 @@ __do_fork (void *aux) {
             current->fd_table[fd] = file_duplicate(parent->fd_table[fd]); //file_duplicate는 file 구조체를 사용함. 스레드에 구조체 만들죠?
         }
     }
-	process_init ();//프로세스 초기화
+	// process_init ();//프로세스 초기화
 
 
 
-    sema_up(&parent->fork_sema); //  unblock 해주고.
+    sema_up(&current->fork_sema); //  unblock 해주고.
 
 	/* Finally, switch to the newly created process. */
 	if (succ)
 		do_iret (&if_);//유저 모드 진입
 error:
-	syscall_exit(current->exit_status); //  현재 프로세스(자식)의 종료상태 설정.
+	current->exit_status = TID_ERROR;
+	sema_up(&current->fork_sema);
+	syscall_exit(TID_ERROR); //  현재 프로세스(자식)의 종료상태 설정.
 }
 
 /* Switch the current execution context to the f_name.
  * Returns -1 on fail. */
 int
 process_exec (void *f_name) {
-	char *file_name = f_name;
+	char *cmd_line = f_name;
 	bool success;
-	char* file_name_copy;
-	char *next_ptr;
-	char *argv[64];
-	int argc = 0;
-	//문자열 파싱
-	argv[0] = strtok_r(file_name," ",&next_ptr);
-	while(argv[argc]!=NULL){
-		argc++;
-		argv[argc] = strtok_r(NULL," ",&next_ptr);
-	}
-	argv[argc] = NULL; // 유닉스같은데선 문자열 인자(argv) 끝났다는걸 알리기 위해 NULL 넣어줌
 
 	/* We cannot use the intr_frame in the thread structure.
 	 * This is because when current thread rescheduled,
@@ -243,12 +235,29 @@ process_exec (void *f_name) {
 	/* We first kill the current context */
 	process_cleanup ();
 
+
+	char *next_ptr;
+	char *argv[64];
+	int argc = 0;
+	char *file_name = palloc_get_page(0);
+	strlcpy(file_name, cmd_line, PGSIZE);
+	//문자열 파싱
+	argv[0] = strtok_r(file_name," ",&next_ptr);
+	while(argv[argc]!=NULL){
+		argc++;
+		argv[argc] = strtok_r(NULL," ",&next_ptr);
+	}
+	argv[argc] = NULL; // 유닉스같은데선 문자열 인자(argv) 끝났다는걸 알리기 위해 NULL 넣어줌
+
 	/* And then load the binary */
+	printf("file_name:%s : %X\n",file_name,file_name);
 	success = load (file_name, &_if);
+	printf("file_name:%s : %X",file_name,file_name);
 	if (!success){
 		palloc_free_page (file_name);
 		return -1;
 	}
+
 	argument_passing(argv,argc,&_if);
 	/* If load failed, quit. */
 	palloc_free_page (file_name);
@@ -426,6 +435,7 @@ load (const char *file_name, struct intr_frame *if_) {
 	/* Open executable file. */
 	file = filesys_open (file_name);
 	if (file == NULL) {
+		printf("load: %s: open failed\n",file_name);
 		goto done;
 	}
 
