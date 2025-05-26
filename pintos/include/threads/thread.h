@@ -110,7 +110,7 @@ struct thread {
 	struct semaphore wait_sema; 
 	struct list child_list; // 자식 리스트
 	struct list_elem child_elem; //자식 리스트 원소
-	struct file *fd_table[FD_LIMIT];  //fdt
+	struct file_descriptor *fd_table[FD_LIMIT];  //fdt
 
 #ifdef USERPROG
 	/* Owned by userprog/process.c. */ 
