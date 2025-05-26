@@ -224,6 +224,7 @@ thread_create (const char *name, int priority,
 
 	// 현재 스레드의 자식으로 추가
 	list_push_back(&thread_current()->child_list, &t->child_elem);
+	
 	/* Add to run queue. */
 	thread_unblock (t);
 	preemption_priority();
@@ -475,6 +476,7 @@ init_thread (struct thread *t, const char *name, int priority) {
 	t->magic = THREAD_MAGIC;
 	t->is_waited = false;
 	t->exit_status = -1;
+	t->last_created_fd = 2;
 	list_init (&t->donations);
 	list_init (&t->child_list);
 	sema_init(&t->wait_sema, 0);

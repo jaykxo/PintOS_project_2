@@ -58,18 +58,13 @@ process_create_initd (const char *file_name) {
 		return TID_ERROR;
 	strlcpy (fn_copy, file_name, PGSIZE);
 
-	fn_copy2 = palloc_get_page(0); // 한 페이지 할당
-	if (fn_copy2 == NULL)
-		return TID_ERROR;
-	strlcpy (fn_copy2, file_name, PGSIZE);
-
-	real_name = strtok_r(fn_copy2," ",&next_ptr);
+	strtok_r(file_name," ",&next_ptr);
 
 	/* Create a new thread to execute FILE_NAME. */
-	tid = thread_create (real_name, PRI_DEFAULT, initd, fn_copy);
+	tid = thread_create (file_name, PRI_DEFAULT, initd, fn_copy);
 	if (tid == TID_ERROR)
 		palloc_free_page (fn_copy);
-	palloc_free_page(fn_copy2);
+	// palloc_free_page(fn_copy2);
 	return tid;
 }
 
@@ -108,7 +103,10 @@ process_fork (const char *name, struct intr_frame *if_ UNUSED) {
 
     sema_down(&child->fork_sema);
 
-	return child->exit_status == TID_ERROR ? TID_ERROR:pid;
+	if (child == NULL) {
+		return TID_ERROR;
+	}
+	return pid;
 }
 
 #ifndef VM
@@ -127,7 +125,10 @@ duplicate_pte (uint64_t *pte, void *va, void *aux) {
 		return true; //커널영역이면 패스해도 됨.어차피 다 같은 물리주소로 매핑되니까.
 	/* 2. Resolve VA from the parent's page map level 4. */
 	parent_page = pml4_get_page (parent->pml4, va);
-		if(parent_page == NULL) return false;
+	if(parent_page == NULL){
+		printf("⛔ [fork] pml4_get_page failed for va=%p\n", va);
+		return false;
+	} 
 	/* 3. TODO: Allocate new PAL_USER page for the child and set result to
 	 *    TODO: NEWPAGE. */
 	newpage = palloc_get_page(PAL_USER);
@@ -149,7 +150,25 @@ duplicate_pte (uint64_t *pte, void *va, void *aux) {
 	return true;
 }
 #endif
-
+static void
+duplicate_fd_list(struct thread *dest, struct thread *org) {
+	struct file_descriptor **org_fd_list = org->fd_table;
+	struct file_descriptor **dest_fd_list = dest->fd_table;
+	for (int i = 2; i < FD_LIMIT; i++) {
+		struct file_descriptor *org_file_desc = org_fd_list[i];
+		if (org_file_desc == NULL)
+			continue;
+		struct file_descriptor *cpy_file_desc = calloc(sizeof(struct file_descriptor), 1);
+		cpy_file_desc->fd = org_file_desc->fd;
+		cpy_file_desc->file_p = file_duplicate(org_file_desc->file_p);
+		if (cpy_file_desc->file_p == NULL) {
+			free(cpy_file_desc);
+			continue;
+		}
+		dest_fd_list[i] = cpy_file_desc;
+	}
+	dest->last_created_fd = org->last_created_fd;
+}
 /* A thread function that copies parent's execution context.
  * Hint) parent->tf does not hold the userland context of the process.
  *       That is, you are required to pass second argument of process_fork to
@@ -186,7 +205,6 @@ __do_fork (void *aux) {
 	if (!pml4_for_each (parent->pml4, duplicate_pte, parent))
 		goto error;
 #endif
-
 	/* TODO: Your code goes here.
 	 * TODO: Hint) To duplicate the file object, use `file_duplicate`
 	 * TODO:       in include/filesys/file.h. Note that parent should not return
@@ -202,12 +220,13 @@ __do_fork (void *aux) {
             current->fd_table[fd] = file_duplicate(parent->fd_table[fd]); //file_duplicate는 file 구조체를 사용함. 스레드에 구조체 만들죠?
         }
     }
-	// process_init ();//프로세스 초기화
+	duplicate_fd_list(current, parent);
+	process_init ();//프로세스 초기화
 
 
 
     sema_up(&current->fork_sema); //  unblock 해주고.
-
+	
 	/* Finally, switch to the newly created process. */
 	if (succ)
 		do_iret (&if_);//유저 모드 진입
@@ -216,14 +235,26 @@ error:
 	sema_up(&current->fork_sema);
 	syscall_exit(TID_ERROR); //  현재 프로세스(자식)의 종료상태 설정.
 }
+// static void 
+// fdlist_cleanup(struct thread *curr) {
+// 	struct file_descriptor **fd_list = curr->fd_table;
+// 	if (fd_list == NULL)
+// 		return;
+// 	for (int fd = 2; fd < FD_LIMIT; fd++)
+// 		file_close(fd);
+// 	palloc_free_multiple(fd_list, 2);
+// }
 
 /* Switch the current execution context to the f_name.
  * Returns -1 on fail. */
 int
 process_exec (void *f_name) {
-	char *cmd_line = f_name;
+	char *kcopy = palloc_get_page (0);
+	if (kcopy == NULL)
+        return -1;
+    strlcpy (kcopy, f_name, PGSIZE);
+	// char *cmd_line = f_name;
 	bool success;
-
 	/* We cannot use the intr_frame in the thread structure.
 	 * This is because when current thread rescheduled,
 	 * it stores the execution information to the member. */
@@ -234,13 +265,16 @@ process_exec (void *f_name) {
 	//f_name 파싱해서, 실행할 파일은 filename에 갱신? o
 	/* We first kill the current context */
 	process_cleanup ();
-
+	char *cmd_line = kcopy;
 
 	char *next_ptr;
-	char *argv[64];
+	char *argv[32];
 	int argc = 0;
-	char *file_name = palloc_get_page(0);
-	strlcpy(file_name, cmd_line, PGSIZE);
+	// char *file_name = palloc_get_page(PAL_ZERO);
+	// if (file_name == NULL)
+    // 	return -1;
+	// strlcpy(file_name, cmd_line, PGSIZE);
+	char *file_name = kcopy;
 	//문자열 파싱
 	argv[0] = strtok_r(file_name," ",&next_ptr);
 	while(argv[argc]!=NULL){
@@ -250,17 +284,28 @@ process_exec (void *f_name) {
 	argv[argc] = NULL; // 유닉스같은데선 문자열 인자(argv) 끝났다는걸 알리기 위해 NULL 넣어줌
 
 	/* And then load the binary */
-	printf("file_name:%s : %X\n",file_name,file_name);
+	// printf("file_name:%s : %X\n",file_name,file_name);
+	//해결법?
+	if (!is_kernel_vaddr (file_name)) {
+    /* 커널 주소가 아니라면 → 새 커널 버퍼로 복사 */
+		char *kbuf = palloc_get_page (0);
+		if (kbuf == NULL) return -1;
+		strlcpy (kbuf, file_name, PGSIZE);
+		file_name = kbuf;
+	}
+//여기까지
 	success = load (file_name, &_if);
-	printf("file_name:%s : %X",file_name,file_name);
+	// printf("file_name:%s : %X",file_name,file_name);
 	if (!success){
-		palloc_free_page (file_name);
+		// palloc_free_page (file_name);
+		palloc_free_page (kcopy);   
 		return -1;
 	}
 
 	argument_passing(argv,argc,&_if);
 	/* If load failed, quit. */
-	palloc_free_page (file_name);
+	// palloc_free_page (file_name);
+	palloc_free_page (kcopy);   
 	/* Start switched process. */
 	// hex_dump(_if.rsp, _if.rsp, USER_STACK-_if.rsp, true);
 	do_iret (&_if);
@@ -310,8 +355,10 @@ process_exit (void) {
     // 유저 프로세스 (페이지 테이블이 설정된 경우)
     printf("%s: exit(%d)\n", curr->name, curr->exit_status);
 }
-	process_cleanup ();
+	
 	sema_up(&curr->wait_sema);//부모가 wait 풀고 리스트에서 지우도록 up
+	// fdlist_cleanup(curr);
+	process_cleanup ();
 	sema_down(&curr->exit_sema);//부모가 할거 다하면 down
 }
 
@@ -319,6 +366,15 @@ process_exit (void) {
 static void
 process_cleanup (void) {
 	struct thread *curr = thread_current ();
+	    /* (1) 실행 중이던 파일 닫기 */
+
+    /* (2) FD 배열 순회하면서 전부 닫기 */
+    for (int i = 0; i < FD_LIMIT; i++) {
+        if (curr->fd_table[i] != NULL) {
+            file_close (curr->fd_table[i]);
+            curr->fd_table[i] = NULL;
+        }
+    }
 
 #ifdef VM
 	supplemental_page_table_kill (&curr->spt);
@@ -427,8 +483,11 @@ load (const char *file_name, struct intr_frame *if_) {
 
 	/* Allocate and activate page directory. */
 	t->pml4 = pml4_create ();
-	if (t->pml4 == NULL)
+	if (t->pml4 == NULL){
+		printf("pml4 실패\n");
 		goto done;
+	}
+		
 
 	process_activate (thread_current ());
 	//여기서 파싱
@@ -438,7 +497,6 @@ load (const char *file_name, struct intr_frame *if_) {
 		printf("load: %s: open failed\n",file_name);
 		goto done;
 	}
-
 	/* Read and verify executable header. */
 	if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
 			|| memcmp (ehdr.e_ident, "\177ELF\2\1\1", 7)
@@ -450,7 +508,6 @@ load (const char *file_name, struct intr_frame *if_) {
 		printf ("load: %s: error loading executable\n", file_name);
 		goto done;
 	}
-
 	/* Read program headers. */
 	file_ofs = ehdr.e_phoff;
 	for (i = 0; i < ehdr.e_phnum; i++) {
@@ -504,8 +561,10 @@ load (const char *file_name, struct intr_frame *if_) {
 		}
 	}
 	/* Set up stack. */
-	if (!setup_stack (if_))
+	if (!setup_stack (if_)){
+		printf("setup_stack failed!\n");
 		goto done;
+	}
 	/* Start address. */
 	if_->rip = ehdr.e_entry;
 	/* TODO: Your code goes here.
@@ -613,7 +672,9 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 		memset (kpage + page_read_bytes, 0, page_zero_bytes);
 
 		/* Add the page to the process's address space. */
+
 		if (!install_page (upage, kpage, writable)) {
+			printf("install_page failed for upage=%p\n", upage);
 			printf("fail\n");
 			palloc_free_page (kpage);
 			return false;
@@ -775,6 +836,7 @@ void argument_passing(char**argv,int argc,struct intr_frame *if_){
 	rsp-=sizeof(void *);
 	memset(rsp, 0, sizeof(char*)); 
 	if_->rsp = rsp;
+
 	
 }
 

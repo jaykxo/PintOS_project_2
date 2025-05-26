@@ -95,6 +95,7 @@ struct thread {
 	int init_priority;  //도네이션 받기전 기본 우선순위
 	int exit_status; //종료 상태.-> project2 
 	bool is_waited;//wait 한적 있는지
+	int last_created_fd;
 	int64_t wake_ticks;
 	/* Shared between thread.c and synch.c. */
 	struct list_elem elem;              /* List element. */
@@ -123,6 +124,10 @@ struct thread {
 	/* Owned by thread.c. */
 	struct intr_frame tf;               /* Information for switching */
 	unsigned magic;                     /* Detects stack overflow. */
+};
+struct file_descriptor {
+	int fd;
+	struct file *file_p;
 };
 
 /* If false (default), use round-robin scheduler.

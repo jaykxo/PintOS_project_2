@@ -280,7 +280,9 @@ palloc_get_multiple (enum palloc_flags flags, size_t page_cnt) {
 		if (flags & PAL_ASSERT)
 			PANIC ("palloc_get: out of pages");
 	}
-
+	if (pages == NULL || (flags & PAL_ASSERT))
+			printf ("[palloc]  flags=%x  caller=%p\n",
+					 flags, __builtin_return_address (0));
 	return pages;
 }
 

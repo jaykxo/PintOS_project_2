@@ -93,7 +93,7 @@ int syscall_exit(int status){
 }
 
 int syscall_write(int fd,void * buffer, unsigned size){
-	
+	check_user_address(buffer);
 	//fd1 -> stdout ->  FDT -> innode table->dev/tty에 출력
 	if (fd == 1) {  // STDOUT
         putbuf(buffer, size);
@@ -118,7 +118,7 @@ int exec(const char *cmd_line)
 	if (cmd_line_copy == NULL)
 		return -1;						  
 	strlcpy(cmd_line_copy, cmd_line, PGSIZE); 
-
+	// printf("EXEC: cmd_line_copy contains: %s\n", cmd_line_copy);
 	// 스레드의 이름을 변경하지 않고 바로 실행한다.
 	if (process_exec(cmd_line_copy) == -1)
 		return -1; // 실패 시 status -1로 종료한다.
