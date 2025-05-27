@@ -151,23 +151,15 @@ duplicate_pte (uint64_t *pte, void *va, void *aux) {
 }
 #endif
 static void
-duplicate_fd_list(struct thread *dest, struct thread *org) {
-	struct file_descriptor **org_fd_list = org->fd_table;
-	struct file_descriptor **dest_fd_list = dest->fd_table;
-	for (int i = 2; i < FD_LIMIT; i++) {
-		struct file_descriptor *org_file_desc = org_fd_list[i];
-		if (org_file_desc == NULL)
-			continue;
-		struct file_descriptor *cpy_file_desc = calloc(sizeof(struct file_descriptor), 1);
-		cpy_file_desc->fd = org_file_desc->fd;
-		cpy_file_desc->file_p = file_duplicate(org_file_desc->file_p);
-		if (cpy_file_desc->file_p == NULL) {
-			free(cpy_file_desc);
-			continue;
-		}
-		dest_fd_list[i] = cpy_file_desc;
-	}
-	dest->last_created_fd = org->last_created_fd;
+duplicate_fd_list(struct file **dest, struct file **src) {
+    for (int i = 0; i < FD_LIMIT; i++) {
+        if (src[i] != NULL) {
+            // 열린 파일을 다시 열어 자식에게 복사
+            dest[i] = file_duplicate(src[i]);
+        } else {
+            dest[i] = NULL;
+        }
+    }
 }
 /* A thread function that copies parent's execution context.
  * Hint) parent->tf does not hold the userland context of the process.
@@ -220,7 +212,7 @@ __do_fork (void *aux) {
             current->fd_table[fd] = file_duplicate(parent->fd_table[fd]); //file_duplicate는 file 구조체를 사용함. 스레드에 구조체 만들죠?
         }
     }
-	duplicate_fd_list(current, parent);
+	duplicate_fd_list(current->fd_table, parent->fd_table);
 	process_init ();//프로세스 초기화
 
 
@@ -355,6 +347,7 @@ process_exit (void) {
     // 유저 프로세스 (페이지 테이블이 설정된 경우)
     printf("%s: exit(%d)\n", curr->name, curr->exit_status);
 }
+	// file_close(curr->running_file);
 	
 	sema_up(&curr->wait_sema);//부모가 wait 풀고 리스트에서 지우도록 up
 	// fdlist_cleanup(curr);
@@ -375,6 +368,11 @@ process_cleanup (void) {
             curr->fd_table[i] = NULL;
         }
     }
+	if (curr->running_file != NULL) {
+    file_allow_write(curr->running_file);  // write 다시 허용
+    file_close(curr->running_file);        // 닫기
+    curr->running_file = NULL;
+}
 
 #ifdef VM
 	supplemental_page_table_kill (&curr->spt);
@@ -570,6 +568,14 @@ load (const char *file_name, struct intr_frame *if_) {
 	/* TODO: Your code goes here.
 	 * TODO: Implement argument passing (see project2/argument_passing.html). */
 
+	/* ➡️➡️➡️➡️➡️rox: 현재 실행중인 스레드에서 실행중인 file을 running_file에 저장
+	그리고 해당 file을 deny_write 시킨다. */
+	struct file *exec_file = file_duplicate(file);
+	if (exec_file == NULL)
+		goto done; 
+
+	t->running_file = exec_file;
+	file_deny_write(exec_file);
 	success = true;
 done:
 	/* We arrive here whether the load is successful or not. */

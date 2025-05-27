@@ -110,7 +110,8 @@ struct thread {
 	struct semaphore wait_sema; 
 	struct list child_list; // 자식 리스트
 	struct list_elem child_elem; //자식 리스트 원소
-	struct file_descriptor *fd_table[FD_LIMIT];  //fdt
+	struct file *fd_table[FD_LIMIT];  //fdt
+	struct file *running_file; /* ➡️➡️➡️➡️➡️rox: 현재 프로세스가 실행중인 바이너리 파일 객체 */
 
 #ifdef USERPROG
 	/* Owned by userprog/process.c. */ 

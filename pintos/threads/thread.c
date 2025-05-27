@@ -335,7 +335,6 @@ thread_exit (void) {
 	   /* 현재 스레드의 상태를 dying(사망 예정)으로 설정하고,
    다른 프로세스를 스케줄하도록 한다.
    우리는 schedule_tail() 호출 중에 완전히 파괴된다. */
-
 	intr_disable ();
 	do_schedule (THREAD_DYING);
 	NOT_REACHED ();

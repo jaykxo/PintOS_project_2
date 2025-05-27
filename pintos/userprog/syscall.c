@@ -20,7 +20,8 @@ void syscall_entry (void);
 void syscall_handler (struct intr_frame *);
 static bool put_user (uint8_t *udst, uint8_t byte);
 static int64_t get_user (const uint8_t *uaddr);
-
+bool syscall_remove(const char *file);
+unsigned syscall_tell(int fd);
 void validate_buffer(const void *buffer, size_t size);
 struct file_descriptor *find_file_descriptor(int fd);
 /* System call.
@@ -94,6 +95,15 @@ syscall_handler (struct intr_frame *f UNUSED) {
 		case SYS_FILESIZE:
 			f->R.rax = filesize(arg0);
 			break;
+				case SYS_SEEK:
+		    syscall_seek((int)arg0, (unsigned)arg1);
+			break;
+		case SYS_TELL:
+		    f->R.rax = syscall_tell((int)arg0);
+			break;
+		case SYS_REMOVE:
+		    f->R.rax = syscall_remove((const char *)arg0);
+			break;
 		default:
 			break;
 	}
@@ -130,6 +140,11 @@ int syscall_write(int fd,void * buffer, unsigned size){
     }
 	// 파일 출력
 	if (fd >= 2 && fd < FD_LIMIT) {
+			/* ➡️➡️➡️➡️➡️ rox: write 하려는 파일과, 현재 스레드가 실행 중인 파일이 같은 inode를 참조중인지 비교*/
+		struct file *target_file = cur->fd_table[fd];
+		if (fd >= 2 && target_file != NULL && cur->running_file != NULL &&
+			file_get_inode(target_file) == file_get_inode(cur->running_file)) {
+		return 0;}
 		void *kbuf = palloc_get_page(0);
 		if (kbuf == NULL)
 			syscall_exit(-1);
@@ -138,12 +153,11 @@ int syscall_write(int fd,void * buffer, unsigned size){
 		if (file == NULL) {
 			palloc_free_page(kbuf);
 			return -1;             // 안 열려이씀? 실패 ㅋ
-		}
-		lock_acquire(&filesys_lock);             // 파일 시스템 접근 락 겟또
+		}          
+		lock_acquire(&filesys_lock); // 파일 시스템 접근 락 겟또
 		int bytes_written = file_write(file, kbuf, size);  // 파일에 쓰기
-		lock_release(&filesys_lock);             // 해제한 락도 락이다.
 		palloc_free_page(kbuf);
-
+		lock_release(&filesys_lock);
 		return bytes_written;                    // 실제로 쓴 바이트 수 반환
 	}
 	return -1;
@@ -311,6 +325,40 @@ struct file_descriptor *find_file_descriptor(int fd) {
 int filesize (int fd) {
 	struct thread *cur = thread_current();
 	return file_length(cur->fd_table[fd]);
+}
+void syscall_seek(int fd, unsigned position) {
+	if (fd < 2 || fd >= FD_LIMIT)    // 0: stdin, 1: stdout 은 seek 불가
+	    return;
+
+	struct thread *cur = thread_current();
+	struct file *file = cur->fd_table[fd];
+	if (file == NULL)
+	    return;
+
+	lock_acquire(&filesys_lock);
+	file_seek(file, position);
+	lock_release(&filesys_lock);
+}
+
+unsigned syscall_tell(int fd) {
+	if (fd < 2 || fd >= FD_LIMIT)
+	    return 0;
+
+	struct thread *cur = thread_current();
+	struct file *file = cur->fd_table[fd];
+	if (file == NULL)
+	    return 0;
+	
+	lock_acquire(&filesys_lock);
+	unsigned pos = file_tell(file);
+	lock_release(&filesys_lock);
+
+	return pos;
+}
+
+bool syscall_remove(const char *file) {
+	check_user_address(file);
+	return filesys_remove(file);
 }
 
 /* Reads a byte at user virtual address UADDR.
