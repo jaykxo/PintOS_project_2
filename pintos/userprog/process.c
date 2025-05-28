@@ -64,7 +64,11 @@ process_create_initd (const char *file_name) {
 	tid = thread_create (file_name, PRI_DEFAULT, initd, fn_copy);
 	if (tid == TID_ERROR)
 		palloc_free_page (fn_copy);
-	// palloc_free_page(fn_copy2);
+	else {
+    struct thread *child = get_child_process(tid);  // ← 추가
+    if (child != NULL)
+        child->is_user_proc = true;                 // ← 여기서 설정!
+	}
 	return tid;
 }
 
@@ -100,10 +104,17 @@ process_fork (const char *name, struct intr_frame *if_ UNUSED) {
 
 	struct thread *child = get_child_process(pid);
 	// 세마 다운, 자식쪽에서 준비끝나면 sema up 예정
+	if (child != NULL)
+    child->is_user_proc = true; 
 
     sema_down(&child->fork_sema);
 
-	if (child == NULL) {
+	// if (child== NULL) {
+	// 	sema_up(&child->exit_sema);
+	// 	return TID_ERROR;
+	// }
+	if (child->exit_status == TID_ERROR) {
+		sema_up(&child->exit_sema);
 		return TID_ERROR;
 	}
 	return pid;
@@ -207,14 +218,14 @@ __do_fork (void *aux) {
 	 * TODO: 주의할 점은, 부모 프로세스는 자식의 리소스 복제가 성공적으로 완료되기 전까지는
 	 * TODO: fork()에서 반환하면 안 된다는 것입니다. */ //process_fork 에서 sema 다운 해놨음.
 
-	for (int fd = 0; fd < FD_LIMIT; fd++) {
-        if (parent->fd_table[fd] != NULL) {
-            current->fd_table[fd] = file_duplicate(parent->fd_table[fd]); //file_duplicate는 file 구조체를 사용함. 스레드에 구조체 만들죠?
-        }
-    }
+	// for (int fd = 0; fd < FD_LIMIT; fd++) {
+    //     if (parent->fd_table[fd] != NULL) {
+    //         current->fd_table[fd] = file_duplicate(parent->fd_table[fd]); //file_duplicate는 file 구조체를 사용함. 스레드에 구조체 만들죠?
+    //     }
+    // }
 	duplicate_fd_list(current->fd_table, parent->fd_table);
 	process_init ();//프로세스 초기화
-
+	current->exit_status = 0;//oom
 
 
     sema_up(&current->fork_sema); //  unblock 해주고.
@@ -242,9 +253,11 @@ error:
 int
 process_exec (void *f_name) {
 	char *kcopy = palloc_get_page (0);
-	if (kcopy == NULL)
-        return -1;
+	if (kcopy == NULL){
+		return -1;
+	}
     strlcpy (kcopy, f_name, PGSIZE);
+	palloc_free_page (f_name); 
 	// char *cmd_line = f_name;
 	bool success;
 	/* We cannot use the intr_frame in the thread structure.
@@ -257,7 +270,7 @@ process_exec (void *f_name) {
 	//f_name 파싱해서, 실행할 파일은 filename에 갱신? o
 	/* We first kill the current context */
 	process_cleanup ();
-	char *cmd_line = kcopy;
+	// char *cmd_line = kcopy;
 
 	char *next_ptr;
 	char *argv[32];
@@ -278,10 +291,14 @@ process_exec (void *f_name) {
 	/* And then load the binary */
 	// printf("file_name:%s : %X\n",file_name,file_name);
 	//해결법?
+	char *kbuf =  NULL;
 	if (!is_kernel_vaddr (file_name)) {
     /* 커널 주소가 아니라면 → 새 커널 버퍼로 복사 */
-		char *kbuf = palloc_get_page (0);
-		if (kbuf == NULL) return -1;
+		kbuf = palloc_get_page (0);
+		if (kbuf == NULL){
+			palloc_free_page (kbuf);
+			return -1;
+		} 
 		strlcpy (kbuf, file_name, PGSIZE);
 		file_name = kbuf;
 	}
@@ -289,14 +306,15 @@ process_exec (void *f_name) {
 	success = load (file_name, &_if);
 	// printf("file_name:%s : %X",file_name,file_name);
 	if (!success){
-		// palloc_free_page (file_name);
+		if (kbuf)  palloc_free_page (kbuf);
 		palloc_free_page (kcopy);   
 		return -1;
 	}
-
+	if (kbuf)  palloc_free_page (kbuf);
 	argument_passing(argv,argc,&_if);
 	/* If load failed, quit. */
 	// palloc_free_page (file_name);
+	// palloc_free_page (f_name);
 	palloc_free_page (kcopy);   
 	/* Start switched process. */
 	// hex_dump(_if.rsp, _if.rsp, USER_STACK-_if.rsp, true);
@@ -343,10 +361,24 @@ process_exit (void) {
 	 * TODO: Implement process termination message (see
 	 * TODO: project2/process_termination.html).
 	 * TODO: We recommend you to implement process resource cleanup here. */
-    if (curr->pml4 != NULL) {
+	    /* (1) 실행 중이던 파일 닫기 */
+
+    /* (2) FD 배열 순회하면서 전부 닫기 */
+    for (int i = 2; i < FD_LIMIT; i++) {
+        if (curr->fd_table[i] != NULL) {
+            file_close (curr->fd_table[i]);
+            curr->fd_table[i] = NULL;
+        }
+    }
+	if (curr->running_file != NULL) {
+    file_allow_write(curr->running_file);  // write 다시 허용
+    file_close(curr->running_file);        // 닫기
+    curr->running_file = NULL;
+}
+    if (curr->is_user_proc)   {
     // 유저 프로세스 (페이지 테이블이 설정된 경우)
     printf("%s: exit(%d)\n", curr->name, curr->exit_status);
-}
+	}
 	// file_close(curr->running_file);
 	
 	sema_up(&curr->wait_sema);//부모가 wait 풀고 리스트에서 지우도록 up
@@ -359,20 +391,6 @@ process_exit (void) {
 static void
 process_cleanup (void) {
 	struct thread *curr = thread_current ();
-	    /* (1) 실행 중이던 파일 닫기 */
-
-    /* (2) FD 배열 순회하면서 전부 닫기 */
-    for (int i = 0; i < FD_LIMIT; i++) {
-        if (curr->fd_table[i] != NULL) {
-            file_close (curr->fd_table[i]);
-            curr->fd_table[i] = NULL;
-        }
-    }
-	if (curr->running_file != NULL) {
-    file_allow_write(curr->running_file);  // write 다시 허용
-    file_close(curr->running_file);        // 닫기
-    curr->running_file = NULL;
-}
 
 #ifdef VM
 	supplemental_page_table_kill (&curr->spt);
@@ -667,8 +685,11 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 
 		/* Get a page of memory. */
 		uint8_t *kpage = palloc_get_page (PAL_USER);
-		if (kpage == NULL)
+		if (kpage == NULL){
 			return false;
+		}
+		
+
 
 		/* Load this page. */
 		if (file_read (file, kpage, page_read_bytes) != (int) page_read_bytes) {

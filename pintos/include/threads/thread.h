@@ -96,6 +96,8 @@ struct thread {
 	int exit_status; //종료 상태.-> project2 
 	bool is_waited;//wait 한적 있는지
 	int last_created_fd;
+	bool is_user_proc;
+
 	int64_t wake_ticks;
 	/* Shared between thread.c and synch.c. */
 	struct list_elem elem;              /* List element. */

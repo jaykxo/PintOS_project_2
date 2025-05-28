@@ -128,14 +128,10 @@ int syscall_write(int fd,void * buffer, unsigned size){
 	if (size == 0) return 0;
 	struct thread *cur = thread_current();
 	validate_buffer(buffer, size);
+	// lock_acquire(&filesys_lock);
 	//fd1 -> stdout ->  FDT -> innode table->dev/tty에 출력
 	if (fd == 1) {  // STDOUT
-		void *kbuf = palloc_get_page(0);
-		if (kbuf == NULL)
-			syscall_exit(-1);
-		memcpy(kbuf, buffer, size);
-		putbuf(kbuf, size);
-		palloc_free_page(kbuf);
+		putbuf(buffer, size);
 		return size;
     }
 	// 파일 출력
@@ -145,19 +141,16 @@ int syscall_write(int fd,void * buffer, unsigned size){
 		if (fd >= 2 && target_file != NULL && cur->running_file != NULL &&
 			file_get_inode(target_file) == file_get_inode(cur->running_file)) {
 		return 0;}
-		void *kbuf = palloc_get_page(0);
-		if (kbuf == NULL)
-			syscall_exit(-1);
-		memcpy(kbuf, buffer, size);
-		struct file *file = cur->fd_table[fd];   // 해당 fd에 열려있는 파일 가져오기
-		if (file == NULL) {
-			palloc_free_page(kbuf);
-			return -1;             // 안 열려이씀? 실패 ㅋ
-		}          
+
+		// struct file *file = cur->fd_table[fd];   // 해당 fd에 열려있는 파일 가져오기      
 		lock_acquire(&filesys_lock); // 파일 시스템 접근 락 겟또
-		int bytes_written = file_write(file, kbuf, size);  // 파일에 쓰기
-		palloc_free_page(kbuf);
+		int bytes_written = file_write(target_file, buffer, size);  // 파일에 쓰기
+
 		lock_release(&filesys_lock);
+
+        if (bytes_written < 0)
+            return -1;
+
 		return bytes_written;                    // 실제로 쓴 바이트 수 반환
 	}
 	return -1;
